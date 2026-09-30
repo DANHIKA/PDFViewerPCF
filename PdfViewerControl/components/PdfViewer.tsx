@@ -108,15 +108,6 @@ const getUserFriendlyError = (error: Error | string): string => {
     return 'An error occurred while loading the document. Please try again.';
 };
 
-// URL validation for security (prevents javascript: and data: protocol attacks)
-const isValidUrl = (url: string): boolean => {
-    try {
-        const parsed = new URL(url);
-        return ['http:', 'https:'].includes(parsed.protocol);
-    } catch {
-        return false;
-    }
-};
 
 /**
  * Configuration constants for the PDF Viewer
@@ -236,9 +227,6 @@ export const PdfViewer: React.FC<IPdfViewerProps> = ({
     // Document key - changes when loading a new document to force canvas remount
     const [documentKey, setDocumentKey] = useState(0);
 
-    // Test mode state
-    const [testUrl, setTestUrl] = useState('https://mozilla.github.io/pdf.js/web/compressed.tracemonkey-pldi-09.pdf');
-    const fileInputRef = useRef<HTMLInputElement>(null);
 
     // Refs
     const canvasContainerRef = useRef<HTMLDivElement>(null);
@@ -475,120 +463,6 @@ export const PdfViewer: React.FC<IPdfViewerProps> = ({
         return false;
     };
 
-    // Load PDF from URL (test mode)
-    const loadFromUrl = async (url: string) => {
-        setViewerState('loading');
-        setLoadingMessage('Loading PDF from URL...');
-        setLoadingProgress(0);
-        setSelectedColumn('test-url');
-
-        const pdfService = pdfServiceRef.current;
-
-        try {
-            setFileType('pdf');
-            await pdfService.loadFromUrl(url, (loaded, total) => {
-                setLoadingProgress((loaded / total) * 100);
-            });
-
-            const viewports = await pdfService.getAllPageViewports();
-            setPageViewports(viewports);
-            setTotalPages(pdfService.getPageCount());
-            setCurrentPage(1);
-
-            const meta = await pdfService.getMetadata();
-            setMetadata(meta);
-
-            const docOutline = await pdfService.getOutline();
-            setOutline(docOutline);
-
-            setViewerState('viewing');
-        } catch (error) {
-            const errMsg = error instanceof Error ? error : String(error);
-            setErrorMessage(getUserFriendlyError(errMsg));
-            setViewerState('error');
-        }
-    };
-
-    // Determine if file is an image by MIME type or extension
-    const isImageFileByNameOrType = (file: File): boolean => {
-        // Check MIME type first
-        if (file.type.startsWith('image/')) {
-            return true;
-        }
-        // Check by extension (browser might not correctly detect MIME type)
-        const extension = file.name.split('.').pop()?.toLowerCase() || '';
-        return CONFIG.IMAGE_EXTENSIONS.includes(extension);
-    };
-
-    // Determine if file is a PDF by MIME type or extension
-    const isPdfFileByNameOrType = (file: File): boolean => {
-        // Check MIME type first
-        if (file.type === 'application/pdf') {
-            return true;
-        }
-        // Check by extension
-        const extension = file.name.split('.').pop()?.toLowerCase() || '';
-        return extension === 'pdf';
-    };
-
-    // Load PDF from local file (test mode)
-    const loadFromFile = async (file: File) => {
-        setViewerState('loading');
-        setLoadingMessage(`Loading ${file.name}...`);
-        setLoadingProgress(0);
-        setSelectedColumn(file.name);
-
-        const pdfService = pdfServiceRef.current;
-
-        try {
-            // Determine file type by MIME type or extension
-            const isImage = isImageFileByNameOrType(file);
-            const isPdf = isPdfFileByNameOrType(file);
-
-            if (isImage) {
-                // Handle image files
-                setFileType('image');
-                const url = URL.createObjectURL(file);
-                setImageUrl(url);
-                setTotalPages(1);
-                setCurrentPage(1);
-                setViewerState('viewing');
-            } else if (isPdf || !isImage) {
-                // Handle PDF files (or try as PDF if unknown type)
-                setFileType('pdf');
-                await pdfService.loadFromBlob(file, (loaded, total) => {
-                    if (total > 0) {
-                        setLoadingProgress((loaded / total) * 100);
-                    }
-                });
-
-                const viewports = await pdfService.getAllPageViewports();
-                setPageViewports(viewports);
-                setTotalPages(pdfService.getPageCount());
-                setCurrentPage(1);
-
-                const meta = await pdfService.getMetadata();
-                setMetadata(meta);
-
-                const docOutline = await pdfService.getOutline();
-                setOutline(docOutline);
-
-                setViewerState('viewing');
-            }
-        } catch (error) {
-            const errMsg = error instanceof Error ? error : String(error);
-            setErrorMessage(getUserFriendlyError(errMsg));
-            setViewerState('error');
-        }
-    };
-
-    // Handle file input change
-    const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (file) {
-            loadFromFile(file);
-        }
-    };
 
     // Calculate scale for fit modes
     const calculateScale = useCallback((mode: string): number => {
@@ -1004,115 +878,38 @@ export const PdfViewer: React.FC<IPdfViewerProps> = ({
             <div className="pdf-viewer-container" data-theme={darkMode ? 'dark' : 'light'} ref={containerRef}
                  style={{ width: width || '100%', height: height || 500 }}>
                 <div className="pdf-config-panel">
-                    <h2>📄 Document Viewer</h2>
-                    <p className="subtitle">{isTestMode ? 'Test Mode - Load a PDF to preview' : 'Select which document to display'}</p>
-
-                    {!isTestMode && (
-                        <div className="pdf-config-detected">
-                            <div className="pdf-config-detected-item">
-                                <div className="label">Table</div>
-                                <div className={`value ${viewerConfig?.tableName ? 'success' : 'error'}`}>
-                                    {viewerConfig?.tableName || 'Not detected'}
-                                </div>
-                            </div>
-                            <div className="pdf-config-detected-item">
-                                <div className="label">Record</div>
-                                <div className={`value ${viewerConfig?.recordId ? 'success' : 'error'}`}>
-                                    {viewerConfig?.recordId ? viewerConfig.recordId.substring(0, 8) + '...' : 'Not detected'}
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {isTestMode ? (
-                        <>
-                            {/* Test Mode - URL Input */}
-                            <div className="pdf-config-section">
-                                <label>Load from URL</label>
-                                <input
-                                    type="text"
-                                    className="pdf-config-select"
-                                    value={testUrl}
-                                    onChange={(e) => setTestUrl(e.target.value)}
-                                    placeholder="Enter PDF URL..."
-                                    style={{ marginBottom: 8 }}
-                                />
-                                <button
-                                    className="pdf-config-btn"
-                                    onClick={() => {
-                                        if (isValidUrl(testUrl)) {
-                                            loadFromUrl(testUrl);
-                                        } else {
-                                            setErrorMessage('Invalid URL. Must be a valid http:// or https:// URL.');
-                                            setViewerState('error');
-                                        }
-                                    }}
-                                    disabled={!testUrl}
-                                >
-                                    Load from URL
-                                </button>
-                            </div>
-
-                            {/* Test Mode - File Upload */}
-                            <div className="pdf-config-section" style={{ marginTop: 20 }}>
-                                <label>Or upload a file</label>
-                                <input
-                                    type="file"
-                                    ref={fileInputRef}
-                                    onChange={handleFileSelect}
-                                    accept=".pdf,.jpg,.jpeg,.png,.gif,.bmp,.webp"
-                                    style={{ display: 'none' }}
-                                />
-                                <button
-                                    className="pdf-config-btn"
-                                    onClick={() => fileInputRef.current?.click()}
-                                    style={{ background: 'transparent', color: 'var(--pdf-primary-color)', border: '1px solid var(--pdf-primary-color)' }}
-                                >
-                                    Choose File (PDF or Image)
-                                </button>
-                            </div>
-
-                            <div className="pdf-config-info" style={{ marginTop: 20 }}>
-                                <strong>Test Mode Active</strong>
-                                <p style={{ margin: '4px 0 0 0', fontSize: 12 }}>
-                                    No Dataverse context detected. When deployed to Power Apps, the control will automatically load files from Dataverse.
-                                </p>
-                            </div>
-                        </>
-                    ) : columnsWithFiles.length > 0 ? (
+                    {!isTestMode && columnsWithFiles.length > 0 ? (
                         <>
                             <div className="pdf-config-section">
-                                <label>Select File Column</label>
+                                <label>Select document</label>
                                 <select
                                     className="pdf-config-select"
                                     value={selectedColumn || ''}
                                     onChange={(e) => setSelectedColumn(e.target.value)}
                                 >
-                                    <option value="">-- Choose a column --</option>
+                                    <option value="">Choose a file…</option>
                                     {viewerConfig?.fileColumns.map((col) => (
                                         <option
                                             key={col.logicalName}
                                             value={col.logicalName}
                                             disabled={!col.hasFile}
                                         >
-                                            {col.displayName} {col.hasFile ? '✓' : '(empty)'}
-                                            {col.logicalName === defaultFileColumn ? ' ⭐' : ''}
+                                            {col.displayName}{col.hasFile ? '' : ' (empty)'}
                                         </option>
                                     ))}
                                 </select>
-                                <div className="hint">Columns marked with ✓ have files attached</div>
                             </div>
                             <button
                                 className="pdf-config-btn"
                                 disabled={!selectedColumn}
                                 onClick={() => selectedColumn && loadDocument(selectedColumn)}
                             >
-                                Load Document
+                                Open
                             </button>
                         </>
                     ) : (
                         <div className="pdf-no-files-message">
-                            <p>📭 No files are attached to this record.</p>
+                            No document attached to this record.
                         </div>
                     )}
                 </div>
